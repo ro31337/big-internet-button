@@ -178,10 +178,114 @@ sudo chmod 666 /dev/ttyACM0
 - **Linux**: Usually `/dev/ttyACM0` or `/dev/ttyUSB0`
 - **macOS**: Look for `/dev/tty.usbmodem*`
 
+## OpenWrt Router Integration
+
+### Overview
+The Big Internet Button can be integrated with OpenWrt routers to create an "Internet Timeout" system. When the timer expires (default: 40 minutes), internet access is blocked until the button is pressed.
+
+### Prerequisites
+- OpenWrt 24.10.2 or later
+- Router with USB port (tested on LinkSys MR8300)
+- Internet connection for initial setup
+- SSH access to router
+
+### Configuration Steps
+
+1. **Connect to your router**:
+   ```bash
+   ssh root@openwrt.lan
+   ```
+
+2. **Update package lists**:
+   ```bash
+   opkg update --no-check-certificate
+   ```
+
+3. **Install required kernel modules**:
+   ```bash
+   # USB ACM driver for serial communication
+   opkg install kmod-usb-acm
+   
+   # USB HID driver for keyboard input
+   opkg install kmod-usb-hid
+   ```
+
+4. **Connect the Big Button** to router's USB port
+
+5. **Verify device detection**:
+   ```bash
+   # Check serial device (for LED/sound control)
+   ls -la /dev/ttyACM0
+   # Expected: crw-rw---- 1 root dialout 166, 0 [date] /dev/ttyACM0
+   
+   # Check input device (for button press detection)
+   ls -la /dev/input/event0
+   # Expected: crw------- 1 root root 13, 64 [date] /dev/input/event0
+   ```
+
+6. **Test button control**:
+   ```bash
+   # LED control
+   echo '2' > /dev/ttyACM0  # LED ON
+   echo '1' > /dev/ttyACM0  # LED OFF
+   
+   # Sound test
+   echo '3' > /dev/ttyACM0  # High beep
+   echo '4' > /dev/ttyACM0  # Low beep
+   ```
+
+### OpenWrt Commands Reference
+
+| Command | Purpose |
+|---------|---------|
+| `opkg update --no-check-certificate` | Update package lists |
+| `opkg install kmod-usb-acm` | Install USB serial driver |
+| `opkg install kmod-usb-hid` | Install USB HID driver |
+| `echo '1' > /dev/ttyACM0` | Turn LED OFF |
+| `echo '2' > /dev/ttyACM0` | Turn LED ON |
+| `echo '3' > /dev/ttyACM0` | Play high beep |
+| `echo '4' > /dev/ttyACM0` | Play low beep |
+| `hexdump -C < /dev/input/event0` | Monitor button presses |
+
+### Implementation Details
+- **Timer Management**: Uses cron jobs (every minute)
+- **Internet Control**: nftables for blocking/allowing traffic
+- **Button Monitoring**: Reads `/dev/input/event0` for Enter key
+- **State Persistence**: Survives router reboots
+- **Resource Usage**: <1% CPU, <1MB RAM
+
+### Troubleshooting OpenWrt
+
+**USB device not detected**:
+```bash
+# Check kernel messages
+dmesg | grep -i usb | tail -20
+
+# View USB device info
+cat /sys/kernel/debug/usb/devices
+```
+
+**Modules not loading**:
+```bash
+# Manually load modules
+modprobe cdc_acm
+modprobe usbhid
+```
+
+**Permission issues**:
+```bash
+# Fix device permissions
+chmod 666 /dev/ttyACM0
+chmod 666 /dev/input/event0
+```
+
+For detailed integration analysis and implementation recommendations, see `prd1-result.md`.
+
 ## Files in This Project
 
 - `README.md` - This file
 - `CLAUDE.md` - Instructions for AI assistants
+- `prd1-result.md` - OpenWrt integration analysis and recommendations
 - `attach-button.ps1` - Windows PowerShell script to attach button to WSL2
 - `attach-button.sh` - Linux script to verify button connection
 - `test-button.rb` - Full test suite with interactive mode
