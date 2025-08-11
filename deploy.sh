@@ -14,6 +14,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# SSH wrapper with timeout
+ssh_exec() {
+    timeout 5 ssh "$ROUTER_HOST" "$@"
+}
+
 # Get timer minutes from config
 TIMER_MINUTES=$(grep "^TIMER_MINUTES=" "$OPENWRT_SCRIPTS_DIR/etc/config" 2>/dev/null | cut -d= -f2 || echo "40")
 WARNING_MINUTES=$((TIMER_MINUTES - 1))
@@ -52,7 +57,7 @@ check_prerequisites() {
     fi
     
     # Check SSH connectivity
-    if ! ssh -o ConnectTimeout=5 "$ROUTER_HOST" "echo 'SSH connection OK'" >/dev/null 2>&1; then
+    if ! ssh_exec "echo 'SSH connection OK'" >/dev/null 2>&1; then
         print_error "Cannot connect to router at $ROUTER_HOST"
         print_warning "Make sure:"
         print_warning "  - Router is powered on and accessible"
@@ -69,9 +74,9 @@ install_packages() {
     print_status "Checking required packages on router..."
     
     # Check for SFTP server first
-    if ! ssh "$ROUTER_HOST" "which /usr/libexec/sftp-server" >/dev/null 2>&1; then
+    if ! ssh_exec "which /usr/libexec/sftp-server" >/dev/null 2>&1; then
         print_status "Installing SFTP server for file transfers..."
-        ssh "$ROUTER_HOST" "opkg update --no-check-certificate && opkg install openssh-sftp-server" || {
+        ssh_exec "opkg update --no-check-certificate && opkg install openssh-sftp-server" || {
             print_error "Failed to install SFTP server"
             print_warning "Please run: opkg install openssh-sftp-server"
             exit 1
@@ -81,11 +86,11 @@ install_packages() {
     # Check if packages are already installed
     PACKAGES_NEEDED=""
     
-    if ! ssh "$ROUTER_HOST" "lsmod | grep -q cdc_acm" 2>/dev/null; then
+    if ! ssh_exec "lsmod | grep -q cdc_acm" 2>/dev/null; then
         PACKAGES_NEEDED="$PACKAGES_NEEDED kmod-usb-acm"
     fi
     
-    if ! ssh "$ROUTER_HOST" "lsmod | grep -q usbhid" 2>/dev/null; then
+    if ! ssh_exec "lsmod | grep -q usbhid" 2>/dev/null; then
         PACKAGES_NEEDED="$PACKAGES_NEEDED kmod-usb-hid"
     fi
     
@@ -93,10 +98,10 @@ install_packages() {
         print_status "Installing required packages: $PACKAGES_NEEDED"
         
         # Update package lists if not already done
-        ssh "$ROUTER_HOST" "opkg list-installed | grep -q openssh-sftp-server || opkg update --no-check-certificate"
+        ssh_exec "opkg list-installed | grep -q openssh-sftp-server || opkg update --no-check-certificate"
         
         # Install packages
-        ssh "$ROUTER_HOST" "opkg install $PACKAGES_NEEDED" || {
+        ssh_exec "opkg install $PACKAGES_NEEDED" || {
             print_error "Package installation failed"
             exit 1
         }
@@ -114,9 +119,9 @@ check_commands() {
     OPTIONAL_COMMANDS="evtest"
     
     # Check for nohup specifically (from coreutils-nohup package)
-    if ! ssh "$ROUTER_HOST" "which nohup" >/dev/null 2>&1; then
+    if ! ssh_exec "which nohup" >/dev/null 2>&1; then
         print_status "Installing nohup for background process management..."
-        ssh "$ROUTER_HOST" "opkg install coreutils-nohup" || {
+        ssh_exec "opkg install coreutils-nohup" || {
             print_warning "Failed to install nohup, will use alternative method"
         }
     fi
@@ -124,7 +129,7 @@ check_commands() {
     # Check required commands
     MISSING_COMMANDS=""
     for cmd in $REQUIRED_COMMANDS; do
-        if ! ssh "$ROUTER_HOST" "which $cmd" >/dev/null 2>&1; then
+        if ! ssh_exec "which $cmd" >/dev/null 2>&1; then
             MISSING_COMMANDS="$MISSING_COMMANDS $cmd"
         fi
     done
@@ -137,7 +142,7 @@ check_commands() {
     
     # Check optional commands
     for cmd in $OPTIONAL_COMMANDS; do
-        if ! ssh "$ROUTER_HOST" "which $cmd" >/dev/null 2>&1; then
+        if ! ssh_exec "which $cmd" >/dev/null 2>&1; then
             print_warning "Optional command '$cmd' not found (not critical)"
         fi
     done
@@ -149,7 +154,7 @@ check_commands() {
 check_usb_device() {
     print_status "Checking for Big Internet Button USB device..."
     
-    if ssh "$ROUTER_HOST" "[ -c /dev/ttyACM0 ]" 2>/dev/null; then
+    if ssh_exec "[ -c /dev/ttyACM0 ]" 2>/dev/null; then
         print_status "Serial device found: /dev/ttyACM0"
     else
         print_warning "Serial device /dev/ttyACM0 not found"
@@ -157,7 +162,7 @@ check_usb_device() {
         
         # Try to detect the device
         print_status "Searching for USB device..."
-        ssh "$ROUTER_HOST" "dmesg | grep -i 'raspberry pi' | tail -5"
+        ssh_exec "dmesg | grep -i 'raspberry pi' | tail -5"
         
         read -p "Continue anyway? (y/n) " -n 1 -r
         echo
@@ -166,7 +171,7 @@ check_usb_device() {
         fi
     fi
     
-    if ssh "$ROUTER_HOST" "[ -c /dev/input/event0 ]" 2>/dev/null; then
+    if ssh_exec "[ -c /dev/input/event0 ]" 2>/dev/null; then
         print_status "Input device found: /dev/input/event0"
     else
         print_warning "Input device /dev/input/event0 not found"
@@ -178,10 +183,14 @@ check_usb_device() {
 stop_existing_service() {
     print_status "Stopping existing service if running..."
     
-    ssh "$ROUTER_HOST" "/etc/init.d/big-button stop" 2>/dev/null || true
+    # First, ensure internet is unblocked so we don't lose connection
+    print_status "Ensuring internet is not blocked..."
+    ssh_exec "nft delete table inet big_button || true"
+    
+    ssh_exec "/etc/init.d/big-button stop" 2>/dev/null || true
     
     # Kill processes using PID files or ps
-    ssh "$ROUTER_HOST" "
+    ssh_exec "
         # Try to kill using PID files first
         [ -f /var/run/big-button-listener.pid ] && kill \$(cat /var/run/big-button-listener.pid) 2>/dev/null || true
         [ -f /var/run/big-button-daemon.pid ] && kill \$(cat /var/run/big-button-daemon.pid) 2>/dev/null || true
@@ -193,10 +202,7 @@ stop_existing_service() {
     " 2>/dev/null || true
     
     # Clean up cron
-    ssh "$ROUTER_HOST" "grep -v 'big-button-timer.sh' /etc/crontabs/root > /tmp/crontab.tmp 2>/dev/null && mv /tmp/crontab.tmp /etc/crontabs/root" 2>/dev/null || true
-    
-    # Ensure internet is unblocked
-    ssh "$ROUTER_HOST" "nft delete table inet big_button" 2>/dev/null || true
+    ssh_exec "grep -v 'big-button-timer.sh' /etc/crontabs/root > /tmp/crontab.tmp 2>/dev/null && mv /tmp/crontab.tmp /etc/crontabs/root" 2>/dev/null || true
     
     print_status "Cleanup complete"
 }
@@ -206,14 +212,14 @@ deploy_scripts() {
     print_status "Deploying scripts to router..."
     
     # Create directories on router
-    ssh "$ROUTER_HOST" "mkdir -p /usr/local/bin /etc/big-button"
+    ssh_exec "mkdir -p /usr/local/bin /etc/big-button"
     
     # Copy main scripts
     print_status "Copying main scripts..."
     for script in big-button-daemon.sh big-button-timer.sh big-button-listener.sh big-button-control.sh monitor.sh; do
         if [ -f "$OPENWRT_SCRIPTS_DIR/bin/$script" ]; then
             scp "$OPENWRT_SCRIPTS_DIR/bin/$script" "$ROUTER_HOST:/usr/local/bin/"
-            ssh "$ROUTER_HOST" "chmod +x /usr/local/bin/$script"
+            ssh_exec "chmod +x /usr/local/bin/$script"
             print_status "  - $script deployed"
         else
             print_error "Script not found: $script"
@@ -223,13 +229,13 @@ deploy_scripts() {
     # Copy init script and enable autostart
     print_status "Copying init script..."
     scp "$OPENWRT_SCRIPTS_DIR/init.d/big-button" "$ROUTER_HOST:/etc/init.d/"
-    ssh "$ROUTER_HOST" "chmod +x /etc/init.d/big-button"
+    ssh_exec "chmod +x /etc/init.d/big-button"
     
     # Enable autostart on boot
     print_status "Enabling autostart on boot..."
-    ssh "$ROUTER_HOST" "/etc/init.d/big-button enable" || {
+    ssh_exec "/etc/init.d/big-button enable" || {
         print_warning "Could not enable autostart, trying manual method..."
-        ssh "$ROUTER_HOST" "ln -sf /etc/init.d/big-button /etc/rc.d/S95big-button"
+        ssh_exec "ln -sf /etc/init.d/big-button /etc/rc.d/S95big-button"
     }
     print_status "  - Autostart enabled (will start on router reboot)"
     
@@ -250,17 +256,17 @@ test_installation() {
     
     # Test LED control
     print_status "Testing LED control..."
-    ssh "$ROUTER_HOST" "/usr/local/bin/big-button-control.sh led on" || true
+    ssh_exec "/usr/local/bin/big-button-control.sh led on" || true
     sleep 1
-    ssh "$ROUTER_HOST" "/usr/local/bin/big-button-control.sh led off" || true
+    ssh_exec "/usr/local/bin/big-button-control.sh led off" || true
     
     # Test beep
     print_status "Testing beep..."
-    ssh "$ROUTER_HOST" "/usr/local/bin/big-button-control.sh beep high" || true
+    ssh_exec "/usr/local/bin/big-button-control.sh beep high" || true
     
     # Run full test
     print_status "Running system test..."
-    ssh "$ROUTER_HOST" "/usr/local/bin/big-button-control.sh test" || true
+    ssh_exec "/usr/local/bin/big-button-control.sh test" || true
 }
 
 # Start the service
@@ -268,7 +274,7 @@ start_service() {
     print_status "Starting Big Internet Button service..."
     
     # Clean up any existing processes first
-    ssh "$ROUTER_HOST" "
+    ssh_exec "
         # Kill using PID files
         [ -f /var/run/big-button-listener.pid ] && kill \$(cat /var/run/big-button-listener.pid) 2>/dev/null || true
         [ -f /var/run/big-button-daemon.pid ] && kill \$(cat /var/run/big-button-daemon.pid) 2>/dev/null || true
@@ -281,11 +287,15 @@ start_service() {
     print_status "Initializing system components..."
     
     # Create a script on the router to properly start the listener
-    ssh "$ROUTER_HOST" 'cat > /tmp/start_listener.sh << "EOF"
+    ssh_exec 'cat > /tmp/start_listener.sh << "EOF"
 #!/bin/sh
-# Initialize state
-echo "0" > /etc/big-button/state
-echo "active" > /etc/big-button/state.status
+# Load config to get TIMER_MINUTES
+. /etc/big-button/config
+
+# Initialize state - start blocked by default
+echo "$TIMER_MINUTES" > /etc/big-button/state
+echo "blocked" > /etc/big-button/state.status
+touch /etc/big-button/state.blocked
 
 # Kill any existing listener
 for pid in $(ps | grep big-button-list | grep -v grep | awk "{print \$1}"); do
@@ -321,19 +331,23 @@ chmod +x /tmp/start_listener.sh
 /tmp/start_listener.sh'
     
     # Setup cron job
-    ssh "$ROUTER_HOST" "
+    ssh_exec "
         grep -v 'big-button-timer' /etc/crontabs/root > /tmp/cron.tmp 2>/dev/null || true
         echo '* * * * * /usr/local/bin/big-button-timer.sh' >> /tmp/cron.tmp
         mv /tmp/cron.tmp /etc/crontabs/root
         /etc/init.d/cron restart >/dev/null 2>&1
         
-        # Give feedback
-        echo '2' > /dev/ttyACM0 2>/dev/null
-        sleep 1
-        echo '1' > /dev/ttyACM0 2>/dev/null
-        echo '3' > /dev/ttyACM0 2>/dev/null
+        # Apply initial blocking since we start in blocked state
+        echo 'Applying initial internet blocking...'
+        nft add table inet big_button 2>/dev/null
+        nft add chain inet big_button forward \{ type filter hook forward priority 0 \; \} 2>/dev/null
+        nft add rule inet big_button forward drop 2>/dev/null
         
-        echo 'Components started'
+        # Turn on red LED to indicate blocked state
+        echo '2' > /dev/ttyACM0 2>/dev/null
+        
+        echo 'Components started - Internet is BLOCKED by default'
+        echo 'Press the button to enable internet access'
     " || {
         print_error "Failed to start service components"
         exit 1
@@ -349,8 +363,8 @@ verify_deployment() {
     local ERRORS=0
     
     # Check listener process (ps truncates names on OpenWrt)
-    if ssh "$ROUTER_HOST" "ps | grep -q 'big-button-list'" 2>/dev/null || \
-       ssh "$ROUTER_HOST" "[ -f /var/run/big-button-listener.pid ] && kill -0 \$(cat /var/run/big-button-listener.pid) 2>/dev/null" 2>/dev/null; then
+    if ssh_exec "ps | grep -q 'big-button-list'" 2>/dev/null || \
+       ssh_exec "[ -f /var/run/big-button-listener.pid ] && kill -0 \$(cat /var/run/big-button-listener.pid) 2>/dev/null" 2>/dev/null; then
         print_status "✓ Listener process running"
     else
         print_error "✗ Listener process not running"
@@ -358,7 +372,7 @@ verify_deployment() {
     fi
     
     # Check cron job
-    if ssh "$ROUTER_HOST" "crontab -l | grep -q 'big-button-timer'" 2>/dev/null; then
+    if ssh_exec "crontab -l | grep -q 'big-button-timer'" 2>/dev/null; then
         print_status "✓ Timer cron job installed"
     else
         print_error "✗ Timer cron job not found"
@@ -366,8 +380,8 @@ verify_deployment() {
     fi
     
     # Check state files
-    if ssh "$ROUTER_HOST" "[ -f /etc/big-button/state ]" 2>/dev/null; then
-        TIMER_VALUE=$(ssh "$ROUTER_HOST" "cat /etc/big-button/state" 2>/dev/null)
+    if ssh_exec "[ -f /etc/big-button/state ]" 2>/dev/null; then
+        TIMER_VALUE=$(ssh_exec "cat /etc/big-button/state" 2>/dev/null)
         print_status "✓ Timer state file exists (value: $TIMER_VALUE)"
     else
         print_error "✗ Timer state file missing"
@@ -375,13 +389,13 @@ verify_deployment() {
     fi
     
     # Check devices
-    if ssh "$ROUTER_HOST" "[ -c /dev/ttyACM0 ]" 2>/dev/null; then
+    if ssh_exec "[ -c /dev/ttyACM0 ]" 2>/dev/null; then
         print_status "✓ Serial device present (/dev/ttyACM0)"
     else
         print_warning "⚠ Serial device not found - make sure button is connected"
     fi
     
-    if ssh "$ROUTER_HOST" "[ -c /dev/input/event0 ]" 2>/dev/null; then
+    if ssh_exec "[ -c /dev/input/event0 ]" 2>/dev/null; then
         print_status "✓ Input device present (/dev/input/event0)"
     else
         print_warning "⚠ Input device not found - button press detection may fail"
@@ -389,9 +403,9 @@ verify_deployment() {
     
     # Test LED control
     print_status "Testing LED control..."
-    ssh "$ROUTER_HOST" "echo '2' > /dev/ttyACM0 2>/dev/null" || true
+    ssh_exec "echo '2' > /dev/ttyACM0 2>/dev/null" || true
     sleep 1
-    ssh "$ROUTER_HOST" "echo '1' > /dev/ttyACM0 2>/dev/null" || true
+    ssh_exec "echo '1' > /dev/ttyACM0 2>/dev/null" || true
     
     if [ $ERRORS -eq 0 ]; then
         print_status "✓ All components verified successfully"
@@ -437,15 +451,15 @@ uninstall() {
     stop_existing_service
     
     # Disable auto-start
-    ssh "$ROUTER_HOST" "/etc/init.d/big-button disable" 2>/dev/null || true
+    ssh_exec "/etc/init.d/big-button disable" 2>/dev/null || true
     
     # Remove files
     print_status "Removing files..."
-    ssh "$ROUTER_HOST" "rm -f /usr/local/bin/big-button-*.sh"
-    ssh "$ROUTER_HOST" "rm -f /etc/init.d/big-button"
-    ssh "$ROUTER_HOST" "rm -rf /etc/big-button"
-    ssh "$ROUTER_HOST" "rm -f /tmp/big-button.log"
-    ssh "$ROUTER_HOST" "rm -f /var/run/big-button*"
+    ssh_exec "rm -f /usr/local/bin/big-button-*.sh"
+    ssh_exec "rm -f /etc/init.d/big-button"
+    ssh_exec "rm -rf /etc/big-button"
+    ssh_exec "rm -f /tmp/big-button.log"
+    ssh_exec "rm -f /var/run/big-button*"
     
     print_status "Uninstallation complete"
     exit 0
@@ -496,12 +510,19 @@ main() {
             echo ""
             print_status "The Big Internet Button is now active on your router"
             echo ""
-            print_status "Testing Timeline:"
+            echo -e "${RED}╔════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║        INTERNET IS NOW BLOCKED!           ║${NC}"
+            echo -e "${RED}║                                            ║${NC}"
+            echo -e "${RED}║   Press the physical button to enable     ║${NC}"
+            echo -e "${RED}║         internet access                   ║${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════╝${NC}"
+            echo ""
+            print_status "After pressing the button, the timer will work as follows:"
             if [ $WARNING_MINUTES -gt 1 ]; then
-                echo "  • Minutes 0-$((WARNING_MINUTES - 1)): Normal operation"
+                echo "  • Minutes 0-$((WARNING_MINUTES - 1)): Normal internet access"
             fi
             echo "  • Minute ${WARNING_MINUTES}: Warning (beep + LED blinks)"
-            echo "  • Minute ${TIMER_MINUTES}: Internet blocks (LED solid red)"
+            echo "  • Minute ${TIMER_MINUTES}: Internet blocks again (LED solid red)"
             echo ""
             print_status "Useful commands:"
             echo "  Monitor:       ssh $ROUTER_HOST '/usr/local/bin/monitor.sh'"

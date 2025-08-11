@@ -30,9 +30,13 @@ DEBOUNCE_TIME=2
 EOF
     fi
     
-    # Initialize state file
-    [ ! -f "$CONFIG_DIR/state" ] && echo "0" > "$CONFIG_DIR/state"
-    [ ! -f "$CONFIG_DIR/state.status" ] && echo "active" > "$CONFIG_DIR/state.status"
+    # Initialize state file - start blocked by default
+    if [ ! -f "$CONFIG_DIR/state" ]; then
+        # Load config to get TIMER_MINUTES value
+        . "$CONFIG_DIR/config"
+        echo "$TIMER_MINUTES" > "$CONFIG_DIR/state"
+    fi
+    [ ! -f "$CONFIG_DIR/state.status" ] && echo "blocked" > "$CONFIG_DIR/state.status"
     
     # Create log file
     [ ! -f "$LOG_FILE" ] && touch "$LOG_FILE"
@@ -41,6 +45,9 @@ EOF
 start_service() {
     # Initialize environment
     init_environment
+    
+    # Load configuration
+    . "$CONFIG_DIR/config"
     
     # Check if USB devices are present
     if [ ! -c "/dev/ttyACM0" ]; then
@@ -71,11 +78,28 @@ start_service() {
     mv /tmp/cron.tmp /etc/crontabs/root
     /etc/init.d/cron restart >/dev/null 2>&1
     
-    # Give feedback
-    echo '2' > /dev/ttyACM0 2>/dev/null
-    sleep 1
-    echo '1' > /dev/ttyACM0 2>/dev/null
-    echo '3' > /dev/ttyACM0 2>/dev/null
+    # Apply initial blocking if state is blocked
+    if [ "$(cat $CONFIG_DIR/state.status 2>/dev/null)" = "blocked" ]; then
+        echo "Applying initial internet blocking..."
+        # Create nftables rules to block forwarding
+        nft add table inet big_button 2>/dev/null
+        nft add chain inet big_button forward \{ type filter hook forward priority 0 \; \} 2>/dev/null
+        nft add rule inet big_button forward drop 2>/dev/null
+        
+        # Turn on red LED to indicate blocked state
+        echo '2' > /dev/ttyACM0 2>/dev/null
+        
+        # Create blocked marker file
+        touch "$CONFIG_DIR/state.blocked"
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - INIT: Internet blocked on startup" >> "$LOG_FILE"
+    else
+        # Give feedback - quick blink and beep
+        echo '2' > /dev/ttyACM0 2>/dev/null
+        sleep 1
+        echo '1' > /dev/ttyACM0 2>/dev/null
+        echo '3' > /dev/ttyACM0 2>/dev/null
+    fi
     
     echo "Big Internet Button service started"
 }
