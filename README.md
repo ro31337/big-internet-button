@@ -438,6 +438,83 @@ If you're tired of losing hours to algorithmic manipulation, if you want your ev
 
 *For detailed integration analysis and implementation recommendations, see `prd1-result.md`.*
 
+## OpenWrt Performance Notice
+
+### ⚠️ Important: Internet Speed Limitations
+
+OpenWrt on Linksys MR8300 (and other ipq40xx devices) may significantly reduce internet speeds compared to stock firmware:
+
+- **Stock firmware**: ~1 Gbps NAT throughput
+- **OpenWrt without offloading**: ~10-50 Mbps (CPU limited)
+- **OpenWrt with software offloading**: ~100-300 Mbps
+- **OpenWrt with hardware offloading**: ~500-800 Mbps (requires custom builds)
+
+### Why This Happens
+
+The stock firmware uses proprietary hardware NAT acceleration that isn't available in standard OpenWrt builds. All routing happens on the CPU, which becomes a bottleneck.
+
+### Enabling Software Flow Offloading
+
+For OpenWrt 24.10.x, enable software acceleration via SSH:
+
+```bash
+# Enable software flow offloading
+ssh root@openwrt.lan
+uci set firewall.@defaults[0].flow_offloading='1'
+uci commit firewall
+/etc/init.d/firewall restart
+
+# Verify it's enabled
+uci get firewall.@defaults[0].flow_offloading
+# Should return: 1
+```
+
+This should increase speeds from ~10 Mbps to ~100-300 Mbps.
+
+### Hardware Offloading (Not Available in Standard Builds)
+
+Standard OpenWrt builds for ipq40xx **do not support hardware offloading**. The command `uci set firewall.@defaults[0].flow_offloading_hw='1'` will return "Invalid argument".
+
+For maximum speeds, you need custom NSS (Network Subsystem) builds:
+
+1. **Forum NSS Builds**: Search "Qualcommax NSS Build" on OpenWrt forum
+2. **GitHub Projects**: Look for `robimarko`, `qosmio/openwrt-ipq`, or `Qualcommax_NSS_Builder`
+3. **Requirements**: These are experimental builds - always verify compatibility with MR8300
+
+### Performance Expectations
+
+| Configuration | Expected Speed | Notes |
+|--------------|---------------|-------|
+| Stock Firmware | 900+ Mbps | Full hardware acceleration |
+| OpenWrt (no offload) | 10-50 Mbps | CPU limited, suitable for basic use |
+| OpenWrt (software offload) | 100-300 Mbps | Good for most home users |
+| OpenWrt NSS builds | 500-800 Mbps | Experimental, hardware accelerated |
+
+### Should You Use OpenWrt?
+
+**Yes, if:**
+- Internet speed <100 Mbps (software offload handles this fine)
+- You value privacy, control, and customization over raw speed
+- You want the Big Internet Button functionality
+
+**Consider alternatives if:**
+- You have gigabit internet and need full speed
+- You're not comfortable with command line configuration
+- You need maximum stability (NSS builds are experimental)
+
+### Quick Speed Test
+
+After enabling software offloading:
+```bash
+# Install speedtest package (optional)
+opkg update
+opkg install speedtest-netperf
+
+# Or use online speedtest from a connected device
+```
+
+**Note**: The Big Internet Button works perfectly regardless of speed limitations - it blocks/unblocks internet at the router level, independent of throughput.
+
 ## Files in This Project
 
 - `README.md` - This file
