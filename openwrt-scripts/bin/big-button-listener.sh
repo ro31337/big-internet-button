@@ -6,19 +6,16 @@
 CONFIG_FILE="/etc/big-button/config"
 STATE_FILE="/etc/big-button/state"
 LOG_FILE="/tmp/big-button.log"
-DEVICE_INPUT="/dev/input/event0"
-DEVICE_SERIAL="/dev/ttyACM0"
 
-# Default values
-ENABLE_LOGGING=1
-DEBOUNCE_TIME=2
-TIMER_MINUTES=40
-SNOOZE_MODE=1  # 1=enabled (add time), 0=disabled (only unblock when blocked)
-
-# Load config
-if [ -f "$CONFIG_FILE" ]; then
-    . "$CONFIG_FILE"
+# Load config - REQUIRED, no defaults!
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Configuration file $CONFIG_FILE not found!" >&2
+    exit 1
 fi
+. "$CONFIG_FILE"
+
+# Calculate WARNING_MINUTES after loading config
+WARNING_MINUTES=$((TIMER_MINUTES - 1))
 
 # Logging function
 log_message() {
@@ -38,17 +35,33 @@ add_timer_minutes() {
     # Store the last button press time
     echo "$(date +%s)" > "${STATE_FILE}.last_press"
     
-    # Quick double-blink to indicate time added
-    echo "2" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.1
-    echo "1" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.1
-    echo "2" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.1
+    # Clean up warning state and blinker if active
+    rm -f "${STATE_FILE}.warning_triggered"
+    rm -f "${STATE_FILE}.blocked"
+    
+    # Stop LED blinker if running
+    if [ -f "${STATE_FILE}.blinker_pid" ]; then
+        BLINKER_PID=$(cat "${STATE_FILE}.blinker_pid" 2>/dev/null)
+        if [ -n "$BLINKER_PID" ] && kill -0 "$BLINKER_PID" 2>/dev/null; then
+            kill "$BLINKER_PID" 2>/dev/null || true
+            
+            # Also kill any orphaned sleep processes from the blinker
+            sleep 1
+            for pid in $(ps | grep "sleep 1" | grep -v grep | awk '{print $1}'); do
+                kill $pid 2>/dev/null || true
+            done
+        fi
+        rm -f "${STATE_FILE}.blinker_pid"
+        rm -f /tmp/blinker.sh
+    fi
+    
+    # Turn off LED first
     echo "1" > "$DEVICE_SERIAL" 2>/dev/null
     
-    # Low beep for feedback
+    # Two low beeps then one high beep (no sleep)
     echo "4" > "$DEVICE_SERIAL" 2>/dev/null
+    echo "4" > "$DEVICE_SERIAL" 2>/dev/null
+    echo "3" > "$DEVICE_SERIAL" 2>/dev/null
     
     log_message "Button pressed - timer reset to 0 (was $CURRENT_TIMER minutes)"
     log_message "Timer will count up to $TIMER_MINUTES minutes from now"
@@ -64,8 +77,10 @@ restore_internet() {
     # Turn off LED
     echo "1" > "$DEVICE_SERIAL" 2>/dev/null
     
-    # Give feedback - low beep
+    # Two low beeps then one high beep (no sleep)
     echo "4" > "$DEVICE_SERIAL" 2>/dev/null
+    echo "4" > "$DEVICE_SERIAL" 2>/dev/null
+    echo "3" > "$DEVICE_SERIAL" 2>/dev/null
     
     # Reset timer
     echo "0" > "$STATE_FILE"
@@ -74,8 +89,19 @@ restore_internet() {
     # Store button press time
     echo "$(date +%s)" > "${STATE_FILE}.last_press"
     
-    # Remove warning file
+    # Remove warning and blocked files
     rm -f "${STATE_FILE}.warning"
+    rm -f "${STATE_FILE}.warning_triggered"
+    rm -f "${STATE_FILE}.blocked"
+    
+    # Stop LED blinker if running (shouldn't be, but just in case)
+    if [ -f "${STATE_FILE}.blinker_pid" ]; then
+        BLINKER_PID=$(cat "${STATE_FILE}.blinker_pid" 2>/dev/null)
+        if [ -n "$BLINKER_PID" ] && kill -0 "$BLINKER_PID" 2>/dev/null; then
+            kill "$BLINKER_PID" 2>/dev/null || true
+        fi
+        rm -f "${STATE_FILE}.blinker_pid"
+    fi
     
     log_message "Internet restored - timer reset"
 }
@@ -100,7 +126,8 @@ is_enter_key() {
 
 # Main listener loop
 main() {
-    log_message "Button listener started"
+    log_message "Button listener started (TIMER=$TIMER_MINUTES min, SNOOZE=$SNOOZE_MODE)"
+    log_message "Monitoring input device: $DEVICE_INPUT"
     
     # Check if input device exists
     if [ ! -c "$DEVICE_INPUT" ]; then
@@ -145,7 +172,7 @@ main() {
         fi
         
         # Small delay to prevent CPU spinning
-        sleep 0.1
+        sleep 1
     done
 }
 

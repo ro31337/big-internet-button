@@ -2,37 +2,41 @@
 # Big Internet Button - Main Daemon Script
 # Manages the overall button system coordination
 
-# Load configuration
+# Configuration paths
 CONFIG_FILE="/etc/big-button/config"
 STATE_FILE="/etc/big-button/state"
 LOCK_FILE="/var/run/big-button.lock"
 LOG_FILE="/tmp/big-button.log"
 PID_FILE="/var/run/big-button-daemon.pid"
 
-# Default configuration
-TIMER_MINUTES=40
-WARNING_MINUTES=39
-DEVICE_SERIAL="/dev/ttyACM0"
-DEVICE_INPUT="/dev/input/event0"
-ENABLE_LOGGING=1
+# Load config - REQUIRED, no defaults!
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Configuration file $CONFIG_FILE not found!" >&2
+    exit 1
+fi
+. "$CONFIG_FILE"
+
+# Calculate WARNING_MINUTES after loading config
+WARNING_MINUTES=$((TIMER_MINUTES - 1))
 
 # Logging function
 log_message() {
     if [ "$ENABLE_LOGGING" = "1" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - DAEMON: $1" >> "$LOG_FILE"
     fi
 }
 
-# Load config if exists
+# Reload config function
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
         . "$CONFIG_FILE"
+        WARNING_MINUTES=$((TIMER_MINUTES - 1))
     fi
 }
 
 # Initialize button on startup
 initialize_button() {
-    log_message "Initializing Big Internet Button"
+    log_message "Initializing Big Internet Button (TIMER=$TIMER_MINUTES min, WARNING=$WARNING_MINUTES min)"
     
     # Check if devices exist
     if [ ! -c "$DEVICE_SERIAL" ]; then
@@ -47,11 +51,11 @@ initialize_button() {
     
     # Blink LED and beep to indicate ready
     echo "2" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.5
+    sleep 1
     echo "1" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.1
+    sleep 1
     echo "3" > "$DEVICE_SERIAL" 2>/dev/null  # High beep
-    sleep 0.1
+    sleep 1
     echo "4" > "$DEVICE_SERIAL" 2>/dev/null  # Low beep
     
     log_message "Button initialized successfully"
@@ -113,11 +117,18 @@ trap_handler() {
 
 # Main daemon function
 main() {
+    # Clear old log on startup
+    echo "=== Big Internet Button Starting ===" > "$LOG_FILE"
+    echo "Time: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+    echo "Configuration: TIMER=$TIMER_MINUTES min, WARNING=$WARNING_MINUTES min" >> "$LOG_FILE"
+    echo "===================================" >> "$LOG_FILE"
+    
     # Check if already running
     if [ -f "$PID_FILE" ]; then
         OLD_PID=$(cat "$PID_FILE")
         if kill -0 "$OLD_PID" 2>/dev/null; then
             echo "Daemon already running with PID $OLD_PID"
+            log_message "Daemon already running with PID $OLD_PID"
             exit 1
         fi
     fi
@@ -130,6 +141,7 @@ main() {
     
     # Load configuration
     load_config
+    log_message "Configuration loaded: TIMER=$TIMER_MINUTES, WARNING=$WARNING_MINUTES"
     
     # Initialize
     if ! initialize_button; then
@@ -144,7 +156,7 @@ main() {
     # Start processes
     start_processes
     
-    log_message "Big Button Daemon started"
+    log_message "Big Button Daemon started successfully (PID: $$)"
     
     # Keep daemon running
     while true; do

@@ -6,13 +6,23 @@
 CONFIG_FILE="/etc/big-button/config"
 STATE_FILE="/etc/big-button/state"
 LOG_FILE="/tmp/big-button.log"
-DEVICE_SERIAL="/dev/ttyACM0"
-DEVICE_INPUT="/dev/input/event0"
 
-# Load config
-if [ -f "$CONFIG_FILE" ]; then
-    . "$CONFIG_FILE"
+# Load config - REQUIRED, no defaults!
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Configuration file $CONFIG_FILE not found!" >&2
+    exit 1
 fi
+. "$CONFIG_FILE"
+
+# Calculate WARNING_MINUTES after loading config
+WARNING_MINUTES=$((TIMER_MINUTES - 1))
+
+# Logging function
+log_message() {
+    if [ "$ENABLE_LOGGING" = "1" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - CONTROL: $1" >> "$LOG_FILE"
+    fi
+}
 
 # Usage information
 usage() {
@@ -44,59 +54,107 @@ EOF
 
 # Show system status
 show_status() {
-    echo "=== Big Internet Button Status ==="
+    echo "╔════════════════════════════════════════════╗"
+    echo "║      Big Internet Button Status           ║"
+    echo "╚════════════════════════════════════════════╝"
     echo ""
     
-    # Check daemon
-    if [ -f /var/run/big-button-daemon.pid ] && kill -0 $(cat /var/run/big-button-daemon.pid) 2>/dev/null; then
-        echo "Daemon: RUNNING (PID: $(cat /var/run/big-button-daemon.pid))"
-    else
-        echo "Daemon: NOT RUNNING"
-    fi
-    
-    # Check listener
-    if [ -f /var/run/big-button-listener.pid ] && kill -0 $(cat /var/run/big-button-listener.pid) 2>/dev/null; then
-        echo "Listener: RUNNING (PID: $(cat /var/run/big-button-listener.pid))"
-    else
-        echo "Listener: NOT RUNNING"
-    fi
-    
-    # Check timer
+    # Get timer values
     if [ -f "$STATE_FILE" ]; then
         ELAPSED=$(cat "$STATE_FILE")
         STATUS=$(cat "${STATE_FILE}.status" 2>/dev/null || echo "unknown")
-        echo "Timer: $ELAPSED minutes"
-        echo "Status: $STATUS"
     else
-        echo "Timer: Not initialized"
+        ELAPSED=0
+        STATUS="unknown"
     fi
     
-    # Check internet blocking
+    # Calculate remaining time
+    REMAINING=$((TIMER_MINUTES - ELAPSED))
+    WARNING_IN=$((WARNING_MINUTES - ELAPSED))
+    
+    echo "Configuration:"
+    echo "  • Timer Duration: $TIMER_MINUTES minutes"
+    echo "  • Warning At: $WARNING_MINUTES minutes"
+    echo "  • Snooze Mode: $([ "$SNOOZE_MODE" = "1" ] && echo "ENABLED (button adds time)" || echo "DISABLED")"
+    echo ""
+    
+    echo "Current State:"
+    echo "  • Timer: $ELAPSED / $TIMER_MINUTES minutes elapsed"
+    echo "  • Status: $STATUS"
+    
+    # Check internet status
     if nft list table inet big_button 2>/dev/null | grep -q "drop"; then
-        echo "Internet: BLOCKED"
+        echo "  • Internet: 🔴 BLOCKED (press button to restore)"
     else
-        echo "Internet: ALLOWED"
+        echo "  • Internet: 🟢 ALLOWED"
+    fi
+    echo ""
+    
+    echo "Timeline:"
+    if [ "$STATUS" = "blocked" ]; then
+        echo "  ⚠️  INTERNET IS BLOCKED - Press button to restore!"
+    elif [ "$ELAPSED" -ge "$WARNING_MINUTES" ]; then
+        echo "  ⚠️  WARNING ACTIVE - Internet blocks in $REMAINING minute(s)!"
+    elif [ "$WARNING_IN" -gt 0 ]; then
+        echo "  • Warning in: $WARNING_IN minute(s)"
+        echo "  • Internet blocks in: $REMAINING minute(s)"
+    else
+        echo "  • Internet blocks in: $REMAINING minute(s)"
+    fi
+    echo ""
+    
+    echo "System Components:"
+    # Check listener
+    if [ -f /var/run/big-button-listener.pid ] && kill -0 $(cat /var/run/big-button-listener.pid) 2>/dev/null; then
+        echo "  • Listener: ✓ Running (PID: $(cat /var/run/big-button-listener.pid))"
+    else
+        echo "  • Listener: ✗ NOT RUNNING"
+    fi
+    
+    # Check cron
+    if crontab -l 2>/dev/null | grep -q "big-button-timer"; then
+        echo "  • Timer Cron: ✓ Installed"
+    else
+        echo "  • Timer Cron: ✗ Not installed"
     fi
     
     # Check devices
+    if [ -c "$DEVICE_SERIAL" ]; then
+        echo "  • Button Serial: ✓ Connected ($DEVICE_SERIAL)"
+    else
+        echo "  • Button Serial: ✗ Not found"
+    fi
+    
+    if [ -c "$DEVICE_INPUT" ]; then
+        echo "  • Button Input: ✓ Connected ($DEVICE_INPUT)"
+    else
+        echo "  • Button Input: ✗ Not found"
+    fi
+    
     echo ""
-    echo "=== Device Status ==="
-    [ -c "$DEVICE_SERIAL" ] && echo "Serial: $DEVICE_SERIAL (OK)" || echo "Serial: $DEVICE_SERIAL (NOT FOUND)"
-    [ -c "$DEVICE_INPUT" ] && echo "Input: $DEVICE_INPUT (OK)" || echo "Input: $DEVICE_INPUT (NOT FOUND)"
+    echo "Last Log Entries:"
+    if [ -f "$LOG_FILE" ]; then
+        tail -3 "$LOG_FILE" | sed 's/^/  /'
+    else
+        echo "  No logs available"
+    fi
 }
 
 # Reset timer
 reset_timer() {
     echo "Resetting timer..."
+    log_message "Manual timer reset requested"
     echo "0" > "$STATE_FILE"
     echo "active" > "${STATE_FILE}.status"
     rm -f "${STATE_FILE}.warning"
+    log_message "Timer reset to 0 minutes"
     echo "Timer reset to 0 minutes"
 }
 
 # Block internet manually
 block_internet() {
     echo "Blocking internet access..."
+    log_message "Manual internet block requested"
     
     # Create nftables rules
     nft add table inet big_button 2>/dev/null
@@ -109,12 +167,14 @@ block_internet() {
     # Update status
     echo "blocked" > "${STATE_FILE}.status"
     
+    log_message "Internet blocked manually"
     echo "Internet blocked"
 }
 
 # Unblock internet manually
 unblock_internet() {
     echo "Unblocking internet access..."
+    log_message "Manual internet unblock requested"
     
     # Remove nftables rules
     nft delete table inet big_button 2>/dev/null
@@ -125,6 +185,7 @@ unblock_internet() {
     # Update status
     echo "active" > "${STATE_FILE}.status"
     
+    log_message "Internet unblocked manually"
     echo "Internet unblocked"
 }
 
@@ -132,10 +193,12 @@ unblock_internet() {
 control_led() {
     case "$1" in
         on)
+            log_message "Manual LED ON"
             echo "2" > "$DEVICE_SERIAL" 2>/dev/null
             echo "LED turned ON"
             ;;
         off)
+            log_message "Manual LED OFF"
             echo "1" > "$DEVICE_SERIAL" 2>/dev/null
             echo "LED turned OFF"
             ;;
@@ -149,10 +212,12 @@ control_led() {
 play_beep() {
     case "$1" in
         high)
+            log_message "Manual high beep"
             echo "3" > "$DEVICE_SERIAL" 2>/dev/null
             echo "High beep played"
             ;;
         low)
+            log_message "Manual low beep"
             echo "4" > "$DEVICE_SERIAL" 2>/dev/null
             echo "Low beep played"
             ;;
@@ -187,26 +252,26 @@ run_test() {
     sleep 1
     echo "   LED OFF"
     echo "1" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.5
+    sleep 1
     echo ""
     
     # Test beeps
     echo "3. Testing beeps..."
     echo "   High beep"
     echo "3" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.5
+    sleep 1
     echo "   Low beep"
     echo "4" > "$DEVICE_SERIAL" 2>/dev/null
-    sleep 0.5
+    sleep 1
     echo ""
     
     # Test blink pattern
     echo "4. Testing blink pattern..."
     for i in 1 2 3; do
         echo "2" > "$DEVICE_SERIAL" 2>/dev/null
-        sleep 0.3
+        sleep 1
         echo "1" > "$DEVICE_SERIAL" 2>/dev/null
-        sleep 0.3
+        sleep 1
     done
     echo "   Blink pattern complete"
     echo ""
@@ -231,14 +296,13 @@ show_config() {
     echo "=== Current Configuration ==="
     if [ -f "$CONFIG_FILE" ]; then
         cat "$CONFIG_FILE"
+        echo ""
+        echo "Calculated values:"
+        echo "  WARNING_MINUTES=$WARNING_MINUTES (TIMER_MINUTES - 1)"
     else
-        echo "No configuration file found"
-        echo "Using defaults:"
-        echo "  TIMER_MINUTES=40"
-        echo "  WARNING_MINUTES=39"
-        echo "  DEVICE_SERIAL=/dev/ttyACM0"
-        echo "  DEVICE_INPUT=/dev/input/event0"
-        echo "  ENABLE_LOGGING=1"
+        echo "ERROR: Configuration file not found at $CONFIG_FILE"
+        echo "Cannot run without configuration!"
+        exit 1
     fi
 }
 

@@ -1,12 +1,13 @@
 # Big Internet Button Configuration File
 # This file configures the behavior of the Big Internet Button system
+# THIS IS THE ONLY PLACE FOR CONFIGURATION - DO NOT SET DEFAULTS IN SCRIPTS!
 
 # Timer Settings
 # How many minutes before internet is blocked
-TIMER_MINUTES=40
+TIMER_MINUTES=5
 
-# When to show warning (minutes)
-WARNING_MINUTES=39
+# WARNING_MINUTES is automatically calculated as TIMER_MINUTES - 1
+# DO NOT SET THIS MANUALLY
 
 # How often to repeat warning (seconds)
 WARNING_REPEAT_SECONDS=30
@@ -28,14 +29,14 @@ DEVICE_INPUT="/dev/input/event0"
 # Enable logging (1=yes, 0=no)
 ENABLE_LOGGING=1
 
-# Log file location
+# Log file location (use /tmp so logs are cleared on reboot)
 LOG_FILE="/tmp/big-button.log"
 
 # Button debounce time in seconds (prevent multiple triggers)
 DEBOUNCE_TIME=2
 
-# LED blink delay in seconds
-LED_BLINK_DELAY=0.5
+# LED blink delay in seconds (minimum 1 second due to router limitations)
+LED_BLINK_DELAY=1
 
 # Optional: Custom firewall table name
 # FIREWALL_TABLE="big_button"
