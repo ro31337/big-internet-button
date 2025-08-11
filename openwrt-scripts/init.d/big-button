@@ -1,0 +1,122 @@
+#!/bin/sh /etc/rc.common
+# Big Internet Button - Init Script for OpenWrt
+# Place in /etc/init.d/big-button
+
+START=95
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/local/bin/big-button-daemon.sh
+CONFIG_DIR=/etc/big-button
+LOG_FILE=/tmp/big-button.log
+
+# Create necessary directories and files
+init_environment() {
+    # Create config directory
+    [ ! -d "$CONFIG_DIR" ] && mkdir -p "$CONFIG_DIR"
+    
+    # Create default config if not exists
+    if [ ! -f "$CONFIG_DIR/config" ]; then
+        cat > "$CONFIG_DIR/config" << EOF
+# Big Internet Button Configuration
+TIMER_MINUTES=40
+WARNING_MINUTES=39
+WARNING_REPEAT_SECONDS=30
+DEVICE_SERIAL="/dev/ttyACM0"
+DEVICE_INPUT="/dev/input/event0"
+ENABLE_LOGGING=1
+LOG_FILE="/tmp/big-button.log"
+DEBOUNCE_TIME=2
+EOF
+    fi
+    
+    # Initialize state file
+    [ ! -f "$CONFIG_DIR/state" ] && echo "0" > "$CONFIG_DIR/state"
+    [ ! -f "$CONFIG_DIR/state.status" ] && echo "active" > "$CONFIG_DIR/state.status"
+    
+    # Create log file
+    [ ! -f "$LOG_FILE" ] && touch "$LOG_FILE"
+}
+
+start_service() {
+    # Initialize environment
+    init_environment
+    
+    # Check if USB devices are present
+    if [ ! -c "/dev/ttyACM0" ]; then
+        echo "Warning: Serial device /dev/ttyACM0 not found"
+        echo "Make sure the Big Internet Button is connected and drivers are loaded"
+        
+        # Try to load modules
+        modprobe cdc_acm 2>/dev/null
+        modprobe usbhid 2>/dev/null
+        
+        # Wait a moment for devices to appear
+        sleep 2
+        
+        # Check again
+        if [ ! -c "/dev/ttyACM0" ]; then
+            echo "Error: Cannot find button device. Aborting."
+            return 1
+        fi
+    fi
+    
+    procd_open_instance
+    procd_set_param command $PROG start
+    procd_set_param respawn
+    procd_set_param stderr 1
+    procd_set_param stdout 1
+    procd_set_param pidfile /var/run/big-button-daemon.pid
+    procd_close_instance
+    
+    echo "Big Internet Button service started"
+}
+
+stop_service() {
+    # Stop daemon
+    if [ -f /var/run/big-button-daemon.pid ]; then
+        kill $(cat /var/run/big-button-daemon.pid) 2>/dev/null
+        rm -f /var/run/big-button-daemon.pid
+    fi
+    
+    # Stop listener
+    if [ -f /var/run/big-button-listener.pid ]; then
+        kill $(cat /var/run/big-button-listener.pid) 2>/dev/null
+        rm -f /var/run/big-button-listener.pid
+    fi
+    
+    # Remove cron job
+    grep -v "big-button-timer.sh" /etc/crontabs/root > /tmp/crontab.tmp 2>/dev/null
+    mv /tmp/crontab.tmp /etc/crontabs/root 2>/dev/null
+    /etc/init.d/cron restart
+    
+    # Ensure internet is unblocked
+    nft delete table inet big_button 2>/dev/null
+    
+    # Turn off LED
+    [ -c "/dev/ttyACM0" ] && echo "1" > /dev/ttyACM0 2>/dev/null
+    
+    echo "Big Internet Button service stopped"
+}
+
+restart() {
+    stop
+    sleep 1
+    start
+}
+
+status() {
+    if [ -f /var/run/big-button-daemon.pid ] && kill -0 $(cat /var/run/big-button-daemon.pid) 2>/dev/null; then
+        echo "Big Internet Button is running"
+        /usr/local/bin/big-button-control.sh status
+    else
+        echo "Big Internet Button is not running"
+    fi
+}
+
+# Additional commands
+boot() {
+    # Wait for USB devices to be ready
+    sleep 5
+    start
+}

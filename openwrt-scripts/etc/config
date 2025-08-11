@@ -1,0 +1,51 @@
+# Big Internet Button Configuration File
+# This file configures the behavior of the Big Internet Button system
+
+# Timer Settings
+# How many minutes before internet is blocked
+TIMER_MINUTES=40
+
+# When to show warning (minutes)
+WARNING_MINUTES=39
+
+# How often to repeat warning (seconds)
+WARNING_REPEAT_SECONDS=30
+
+# Snooze Mode Settings
+# Enable snooze mode - button adds time at any moment (1=enabled, 0=disabled)
+# When enabled: pressing button always resets timer to 0
+# When disabled: button only works when internet is blocked
+SNOOZE_MODE=1
+
+# Device Settings
+# Serial device for LED and sound control
+DEVICE_SERIAL="/dev/ttyACM0"
+
+# Input device for button press detection
+DEVICE_INPUT="/dev/input/event0"
+
+# System Settings
+# Enable logging (1=yes, 0=no)
+ENABLE_LOGGING=1
+
+# Log file location
+LOG_FILE="/tmp/big-button.log"
+
+# Button debounce time in seconds (prevent multiple triggers)
+DEBOUNCE_TIME=2
+
+# LED blink delay in seconds
+LED_BLINK_DELAY=0.5
+
+# Optional: Custom firewall table name
+# FIREWALL_TABLE="big_button"
+
+# Optional: Custom timer increment (minutes per cron run)
+# Default is 1 (runs every minute)
+# TIMER_INCREMENT=1
+
+# Optional: Auto-restart on failure
+# AUTO_RESTART=1
+
+# Optional: Maximum log size in KB (0 = unlimited)
+# MAX_LOG_SIZE=1024
