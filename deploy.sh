@@ -225,16 +225,13 @@ deploy_scripts() {
     scp "$OPENWRT_SCRIPTS_DIR/init.d/big-button" "$ROUTER_HOST:/etc/init.d/"
     ssh "$ROUTER_HOST" "chmod +x /etc/init.d/big-button"
     
-    # Copy configuration (but don't overwrite if exists)
+    # Deploy configuration - ALWAYS overwrite to match local config
     print_status "Deploying configuration..."
-    if ssh "$ROUTER_HOST" "[ ! -f /etc/big-button/config ]" 2>/dev/null; then
-        scp "$OPENWRT_SCRIPTS_DIR/etc/config" "$ROUTER_HOST:/etc/big-button/config"
-        print_status "  - Configuration file deployed"
-    else
-        print_warning "Configuration file already exists - preserving existing config"
-        print_warning "New config saved as /etc/big-button/config.new"
-        scp "$OPENWRT_SCRIPTS_DIR/etc/config" "$ROUTER_HOST:/etc/big-button/config.new"
-    fi
+    scp "$OPENWRT_SCRIPTS_DIR/etc/config" "$ROUTER_HOST:/etc/big-button/config"
+    
+    # Get timer value for display
+    LOCAL_TIMER=$(grep "^TIMER_MINUTES=" "$OPENWRT_SCRIPTS_DIR/etc/config" | cut -d= -f2)
+    print_status "  - Configuration deployed (TIMER: $LOCAL_TIMER minutes)"
     
     print_status "All scripts deployed successfully"
 }
