@@ -68,9 +68,9 @@ start_service() {
         fi
     fi
     
-    # Start listener in background
-    /usr/local/bin/big-button-listener.sh > /tmp/listener.log 2>&1 &
-    echo $! > /var/run/big-button-listener.pid
+    # Start supervisor which will keep listener running
+    /usr/local/bin/big-button-supervisor.sh > /tmp/supervisor.log 2>&1 &
+    echo $! > /var/run/big-button-supervisor.pid
     
     # Setup cron job for timer
     grep -v 'big-button-timer' /etc/crontabs/root > /tmp/cron.tmp 2>/dev/null || true
@@ -111,7 +111,13 @@ stop_service() {
         rm -f /var/run/big-button-daemon.pid
     fi
     
-    # Stop listener
+    # Stop supervisor (which will stop listener too)
+    if [ -f /var/run/big-button-supervisor.pid ]; then
+        kill $(cat /var/run/big-button-supervisor.pid) 2>/dev/null
+        rm -f /var/run/big-button-supervisor.pid
+    fi
+    
+    # Also stop listener if running
     if [ -f /var/run/big-button-listener.pid ]; then
         kill $(cat /var/run/big-button-listener.pid) 2>/dev/null
         rm -f /var/run/big-button-listener.pid
