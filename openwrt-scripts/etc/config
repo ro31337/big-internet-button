@@ -4,7 +4,7 @@
 
 # Timer Settings
 # How many minutes before internet is blocked
-TIMER_MINUTES=5
+TIMER_MINUTES=40
 
 # WARNING_MINUTES is automatically calculated as TIMER_MINUTES - 1
 # DO NOT SET THIS MANUALLY
