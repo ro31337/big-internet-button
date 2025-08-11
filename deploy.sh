@@ -220,10 +220,18 @@ deploy_scripts() {
         fi
     done
     
-    # Copy init script
+    # Copy init script and enable autostart
     print_status "Copying init script..."
     scp "$OPENWRT_SCRIPTS_DIR/init.d/big-button" "$ROUTER_HOST:/etc/init.d/"
     ssh "$ROUTER_HOST" "chmod +x /etc/init.d/big-button"
+    
+    # Enable autostart on boot
+    print_status "Enabling autostart on boot..."
+    ssh "$ROUTER_HOST" "/etc/init.d/big-button enable" || {
+        print_warning "Could not enable autostart, trying manual method..."
+        ssh "$ROUTER_HOST" "ln -sf /etc/init.d/big-button /etc/rc.d/S95big-button"
+    }
+    print_status "  - Autostart enabled (will start on router reboot)"
     
     # Deploy configuration - ALWAYS overwrite to match local config
     print_status "Deploying configuration..."

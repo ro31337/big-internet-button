@@ -61,13 +61,21 @@ start_service() {
         fi
     fi
     
-    procd_open_instance
-    procd_set_param command $PROG start
-    procd_set_param respawn
-    procd_set_param stderr 1
-    procd_set_param stdout 1
-    procd_set_param pidfile /var/run/big-button-daemon.pid
-    procd_close_instance
+    # Start listener in background
+    /usr/local/bin/big-button-listener.sh > /tmp/listener.log 2>&1 &
+    echo $! > /var/run/big-button-listener.pid
+    
+    # Setup cron job for timer
+    grep -v 'big-button-timer' /etc/crontabs/root > /tmp/cron.tmp 2>/dev/null || true
+    echo '* * * * * /usr/local/bin/big-button-timer.sh' >> /tmp/cron.tmp
+    mv /tmp/cron.tmp /etc/crontabs/root
+    /etc/init.d/cron restart >/dev/null 2>&1
+    
+    # Give feedback
+    echo '2' > /dev/ttyACM0 2>/dev/null
+    sleep 1
+    echo '1' > /dev/ttyACM0 2>/dev/null
+    echo '3' > /dev/ttyACM0 2>/dev/null
     
     echo "Big Internet Button service started"
 }
